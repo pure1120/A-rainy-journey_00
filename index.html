@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A Rainy Journey v21</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#14202a;font-family:Arial,"PingFang SC","Microsoft YaHei",sans-serif}
+canvas{display:block;width:100vw;height:100vh;image-rendering:pixelated;background:#14202a}
+#caption{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);max-width:min(1080px,94vw);padding:12px 18px;background:rgba(8,14,20,.76);border:1px solid rgba(223,236,239,.18);color:rgba(241,247,246,.97);font-size:14px;line-height:1.72;text-align:center;pointer-events:none;z-index:10}
+#hint{position:fixed;right:14px;top:14px;padding:9px 13px;background:rgba(8,14,20,.58);border:1px solid rgba(223,236,239,.15);color:rgba(241,247,246,.78);font-size:12px;line-height:1.55;pointer-events:none;z-index:10}
+#note{position:fixed;left:16px;top:14px;max-width:min(390px,46vw);padding:8px 11px;background:rgba(8,14,20,.55);border:1px solid rgba(223,236,239,.12);color:rgba(241,247,246,.72);font-size:11px;line-height:1.5;pointer-events:none;z-index:10}
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div id="caption"></div>
+<div id="hint">Move: carry the umbrella through space<br>Click: add factors to the current space<br>Hold: strengthen / stabilise the boundary<br>N / B: switch scenes&nbsp;&nbsp;R: reset</div>
+<div id="note">A Rainy Journey: the umbrella is a boundary generator, and rain makes boundaries visible. The subject is not a person, but an Internal Domain formed by absence, a central void, and footprints. Each space changes it: generation, occupation, leakage, instability, negotiation, connection, and trace.</div>
+
+<script>
+const canvas=document.getElementById("screen"),ctx=canvas.getContext("2d"),caption=document.getElementById("caption");
+let W=0,H=0,DPR=1,cell=3,cols=0,rows=0,frame=0,scene=0,fade=0;
+const C={bg0:"#14202a",bg1:"#1a2a35",bg2:"#223847",road:"#2d404b",road2:"#354b57",line:"#6f8791",dark:"#131d24",shadow:"#1d2d35",rain:"#abc7cd",rain2:"#728b95",umbrella:"#eff4f0",umbrellaEdge:"#9eb8bf",field:"#4d6773",fieldEdge:"#87a7af",fieldSoft:"#39515c",absence:"#eef5f0",absenceEdge:"#d9e4dd",core:"#d9eeef",coreDark:"#39515d",wet:"#6e8f9a",warm:"#d8c58d",portal:"#c7dde0",other:"#aebfc1",otherDim:"#80959a",trace:"#5e7b84",indoor:"#22323c",indoor2:"#1b2931",glow:"#dfeef0"};
+
+const SPACES=[
+{key:"birth",title:"01 Rainy Street / Boundary Birth",text:"At first, the subject stands in the rain. When the umbrella opens, the Internal Domain beneath it becomes protected and clear. The subject is not a person, but a temporary interior formed by a boundary.",cue:"The subject appears in the rain first. Hold to open the umbrella, shifting it from being exposed to being protected.",thought:"A boundary is not naturally given; it is produced through action."},
+{key:"alley",title:"02 Narrow Alley / Protection Also Excludes",text:"After entering the narrow alley, the more complete the Internal Domain becomes, the more passers-by must move around it. Protection no longer only protects; it also creates an outside.",cue:"Click to add passers-by; observe their detour paths.",thought:"My safe area may become the reason someone else must detour."},
+{key:"threshold",title:"03 Entrance / Compression and Leakage",text:"The entrance is too narrow, so the umbrella must contract. Only when the umbrella becomes too compressed does rain leak back through the edge; the subject is not always exposed, but becomes damaged when the boundary loses balance.",cue:"Approaching the entrance automatically folds the umbrella. Rain only leaks briefly at the narrow doorway, and stabilises again after entering inside.",thought:"A boundary is not simply better when larger or smaller. Scale itself is a form of judgement."},
+{key:"wind",title:"04 Wind Passage / Environment Rewrites Boundary",text:"Wind passes through the corridor. The boundary beneath the umbrella is pushed aside, stretched, and dragged, and the Internal Domain becomes unstable.",cue:"Hold and drag quickly to add wind.",thought:"A boundary never belongs only to the subject; it is also shaped by the environment."},
+{key:"share",title:"05 Bus Stop / Boundary Becomes Negotiation",text:"After another Internal Domain appears, it does not only become valid after entering the shelter. Outside, it is exposed but independent; at the threshold, it becomes transitional; inside the shelter, the two interiors may negotiate a shared boundary.",cue:"Click to create the second subject. Hold and drag it through outside / threshold / inside states. After releasing, the main subject can continue moving to ENTER on the right.",thought:"The second subject also exists outside, but is more independent and exposed. The doorway is a transition; inside, stable sharing becomes possible."},
+{key:"station",title:"06 Station Platform / Temporary Public Boundary",text:"More small umbrellas and Internal Domains appear. They move closer, offset, and fill gaps, forming an imperfect but usable temporary public shelter.",cue:"Click to add more small umbrellas; hold to bring them closer.",thought:"Public space is not given; it is temporarily assembled from many small boundaries."},
+{key:"trace",title:"07 Lobby / Boundary Disappears, Traces Remain",text:"The rain has stopped, and the subject remains in the frame, no longer fully wrapped by the boundary. The umbrella folds, the light brightens, and the ground reveals traces from the journey.",cue:"The final scene automatically shows a quiet concluding image. The right side leads back to the rainy street, or press R to restart.",thought:"What truly remains is not the boundary itself, but the paths, relations, and sense of space it changed."}
+];
+
+let mouse={x:0,y:0,px:0,py:0,down:false},hero={},rain=[],passers=[],leaks=[],umbrellas=[],traces=[],second=null,windBits=[],memory=[];
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function lerp(a,b,t){return a+(b-a)*t}
+function rand(a,b){return a+Math.random()*(b-a)}
+function dist(x1,y1,x2,y2){return Math.hypot(x2-x1,y2-y1)}
+function px(x,y,w=1,h=1,c=C.absence){ctx.fillStyle=c;ctx.fillRect(Math.round(x*cell),Math.round(y*cell),Math.round(w*cell),Math.round(h*cell))}
+function txt(s,x,y,size=14,c="rgba(235,244,246,.82)"){ctx.fillStyle=c;ctx.font=`${size}px monospace`;ctx.textBaseline="top";ctx.fillText(s,x,y)}
+function resize(){DPR=window.devicePixelRatio||1;W=innerWidth;H=innerHeight;canvas.width=Math.floor(W*DPR);canvas.height=Math.floor(H*DPR);ctx.setTransform(DPR,0,0,DPR,0,0);cell=Math.max(3,Math.floor(Math.min(W,H)/240));cols=Math.floor(W/cell);rows=Math.floor(H/cell);mouse.x=cols*.22;mouse.y=rows*.67;init(true)}
+window.addEventListener("resize",resize);
+
+function init(keepMemory){
+ hero={x:cols*.22,y:rows*.68,open:scene===0?.28:.92,target:.92,tilt:0,wind:0,share:0,group:0};
+ rain=[];passers=[];leaks=[];umbrellas=[];traces=[];second=null;windBits=[];if(!keepMemory)memory=[];
+ for(let i=0;i<cols*1.45;i++)rain.push({x:rand(0,cols),y:rand(-rows,rows),v:rand(.42,1.22),len:1+Math.floor(rand(1,4)),d:rand(-.025,.025)});
+ if(SPACES[scene].key==="alley"){passers.push({x:cols*.46,y:rows*.68,w:5,h:13,mood:0});passers.push({x:cols*.61,y:rows*.64,w:4,h:11,mood:0});passers.push({x:cols*.74,y:rows*.70,w:5,h:12,mood:0})}
+ if(SPACES[scene].key==="station"){for(let i=0;i<6;i++)umbrellas.push({x:cols*.27+i*cols*.075+rand(-3,3),y:rows*.71+rand(-2,2),tx:cols*.27+i*cols*.075})}
+ if(SPACES[scene].key==="trace"){traces=[]; hero.x=cols*.50; hero.y=rows*.72;}
+}
+function remember(k){if(!memory.some(m=>m.s===scene&&m.k===k))memory.push({s:scene,k});if(memory.length>30)memory.shift()}
+function cap(){let s=SPACES[scene];caption.innerHTML=`<strong>${s.title}</strong><br>${s.text}<br><span style="opacity:.74">${s.cue}</span><br><span style="opacity:.58">→ ${s.thought}</span>`}
+
+function bg(){ctx.fillStyle=C.bg0;ctx.fillRect(0,0,W,H);for(let y=0;y<rows;y++){let up=y<rows*.58;for(let x=0;x<cols;x++){let c=up?C.bg1:C.road;if((x+y+Math.floor(frame*.04))%11===0)c=up?C.bg2:C.road2;if((x*3+y)%23===0)c=up?"#1c2b35":"#16242d";px(x,y,1,1,c)}}}
+function puddles(n=5){for(let i=0;i<n;i++){let x=cols*(.1+i*(.12+(i%2)*.01)),y=rows*(.80+(i%3)*.025),rx=6+(i%3)*2,ry=2+(i%2);for(let yy=-ry;yy<=ry;yy++)for(let xx=-rx;xx<=rx;xx++)if((xx*xx)/(rx*rx)+(yy*yy)/(ry*ry)<=1)px(x+xx,y+yy,1,1,(yy===0||xx===0)?C.wet:"#58737d")}}
+function street(){let ry=Math.floor(rows*.72);px(0,ry,cols,rows-ry,C.road);px(0,ry,cols,1,C.line);for(let i=0;i<5;i++){let y=ry+7+i*8;for(let x=0;x<cols;x+=18)px(x+(i%2)*8,y,8,1,"#425762")}px(cols*.11,rows*.28,1,rows*.42,C.dark);px(cols*.86,rows*.30,1,rows*.40,C.dark);px(cols*.10,rows*.28,6,1,C.dark);px(cols*.84,rows*.30,6,1,C.dark);px(cols*.10,rows*.27,4,2,C.warm);px(cols*.84,rows*.29,4,2,C.warm);puddles(5)}
+function alley(){street();let l=Math.floor(cols*.22),r=Math.floor(cols*.83);px(l,rows*.34,2,rows*.39,C.dark);px(r,rows*.34,2,rows*.39,C.dark);for(let y=Math.floor(rows*.36);y<rows*.72;y+=8){px(l-4,y,4,1,C.line);px(r+2,y,4,1,C.line)}for(let i=0;i<4;i++){px(l+5,rows*.40+i*10,5,4,"#263b46");px(r-9,rows*.44+i*9,4,3,"#314953")}}
+function threshold(){street();let x=Math.floor(cols*.72),t=Math.floor(rows*.38),b=Math.floor(rows*.74);px(x,t,2,b-t,C.line);px(x,t,Math.floor(cols*.17),2,C.line);px(x+Math.floor(cols*.17),t,2,b-t,C.dark);px(x-8,t-8,Math.floor(cols*.23),6,C.dark);px(x-6,t-7,Math.floor(cols*.18),2,C.warm);for(let i=0;i<6;i++)px(x+3+i*4,b-8,2,6,"#243743")}
+function windpass(){street();px(cols*.28,rows*.34,1,rows*.40,C.dark);px(cols*.82,rows*.32,1,rows*.42,C.dark);px(cols*.28,rows*.34,cols*.54,1,"#3f5661");px(cols*.70,rows*.42,cols*.14,rows*.18,"#1c2b35");for(let y=Math.floor(rows*.58);y<rows*.72;y+=5)px(cols*.35,y,cols*.28,1,"#3d5560")}
+function busstop(){street();let t=Math.floor(rows*.40),l=Math.floor(cols*.56),w=Math.floor(cols*.31);px(l,t,w,2,C.line);px(l,t,2,rows*.30,C.line);px(l+w,t,2,rows*.30,C.line);px(l+8,t-7,24,4,C.dark);px(l+10,t-6,20,2,C.warm);px(l+6,t+Math.floor(rows*.18),w-12,2,"#314752");px(l+7,t+Math.floor(rows*.18)+2,2,6,"#314752");px(l+w-9,t+Math.floor(rows*.18)+2,2,6,"#314752")}
+function station(){street();let t=Math.floor(rows*.38),l=Math.floor(cols*.12),w=Math.floor(cols*.76);px(l,t,w,2,C.line);px(l,t,2,rows*.35,C.line);px(l+w,t,2,rows*.35,C.line);for(let i=0;i<5;i++)px(l+Math.floor(w*(i+1)/6),t,1,rows*.35,C.dark);px(l+8,t-8,34,5,C.dark);px(l+10,t-7,28,2,C.warm);for(let i=0;i<7;i++)px(l+5+i*10,t+6,5,1,"#3a5360");for(let i=0;i<8;i++)px(l+8+i*11,rows*.73,6,1,"#47606b")}
+function lobby(){ctx.fillStyle=C.indoor;ctx.fillRect(0,0,W,H);for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)px(x,y,1,1,((x+y)%2===0)?C.indoor:C.indoor2);px(0,rows*.76,cols,rows*.24,"#263640");px(cols*.16,rows*.38,cols*.68,2,C.line);px(cols*.16,rows*.38,2,rows*.38,C.dark);px(cols*.84,rows*.38,2,rows*.38,C.dark);px(cols*.42,rows*.38,cols*.16,rows*.38,"#15232b");px(cols*.20,rows*.34,8,2,C.warm);px(cols*.72,rows*.34,8,2,C.warm)}
+function clearAfterRain(){
+  // pale window/door opening to suggest rain has passed
+  px(cols*.38, rows*.18, cols*.24, rows*.16, "#d7e3e5");
+  px(cols*.39, rows*.19, cols*.22, rows*.14, "#eef4ef");
+  for(let i=0;i<10;i++) px(cols*.40+i*4, rows*.24+(i%2), 2, 1, "#c4d1d5");
+  // soft sunlight beams
+  for(let i=0;i<32;i++){
+    let bx=cols*.50 + i*1.8;
+    let by=rows*.34 + i*1.2;
+    px(bx,by,3,1,"#c9c39a");
+    if(i%2===0) px(bx-10,by+8,2,1,"#b9c5b0");
+  }
+  // brighter dry floor patch in the center as a final summary stage
+  for(let xx=-26; xx<=26; xx++){
+    for(let yy=-8; yy<=8; yy++){
+      if((xx*xx)/676 + (yy*yy)/64 <= 1 && (xx+yy+frame)%4===0) px(cols*.50+xx, rows*.68+yy, 1, 1, "#556a72");
+    }
+  }
+  outline(cols*.50, rows*.68, 28, 9, "#8ba6a9");
+}
+
+function portal(){
+  let x=Math.floor(cols*.91),y=Math.floor(rows*.57),h=Math.floor(rows*.22),p=Math.sin(frame*.08)*.5+.5;
+  px(x,y,2,h,C.portal);px(x,y,10,2,C.portal);px(x,y+h,10,2,C.portal);
+  if(p>.35){px(x+3,y+3,1,h-5,"#739ca4");px(x+6,y+5,1,h-9,"#436a73")}
+  txt(scene>=SPACES.length-1?"RESTART":"ENTER",x*cell-14,(y+h+4)*cell,11,"rgba(222,239,240,.72)");
+}
+function checkPortal(){
+  if(hero.x>cols*.885&&hero.y>rows*.50&&hero.y<rows*.82){
+    if(scene>=SPACES.length-1){
+      scene=0; memory=[]; fade=1; init(false);
+    }else{
+      remember("arrive"); scene=clamp(scene+1,0,SPACES.length-1); fade=1; init(true);
+    }
+  }
+}
+function inEll(x,y,cx,cy,rx,ry){let dx=(x-cx)/rx,dy=(y-cy)/ry;return dx*dx+dy*dy<=1}
+function field(cx,cy,rx,ry,c=C.field,e=C.fieldEdge,seed=0){for(let yy=-ry;yy<=ry;yy++)for(let xx=-rx;xx<=rx;xx++)if(inEll(cx+xx,cy+yy,cx,cy,rx,ry)&&((xx+yy+frame+seed)%6)!==0)px(cx+xx,cy+yy,1,1,c);outline(cx,cy,rx,ry,e)}
+function outline(cx,cy,rx,ry,c){for(let xx=-rx;xx<=rx;xx+=2){let yy=Math.round(Math.sqrt(Math.max(0,1-(xx/rx)*(xx/rx)))*ry);px(cx+xx,cy-yy,1,1,c);px(cx+xx,cy+yy,1,1,c)}}
+function rainDraw(ex=null,sl=0){if(SPACES[scene].key==="trace")return;for(const r of rain){r.y+=r.v;r.x+=r.d+sl*.012;if(r.y>rows+5){r.y=rand(-16,-2);r.x=rand(0,cols)}if(r.x<0)r.x=cols;if(r.x>cols)r.x=0;let block=ex&&inEll(r.x,r.y,ex.x,ex.y,ex.rx,ex.ry);if(!block)for(let i=0;i<r.len;i++)px(r.x+sl*i*.12,r.y+i,1,1,i===0?C.rain:C.rain2)}}
+function umbrella(x,y,open=1,scale=1,tilt=0,c=C.umbrella,e=C.umbrellaEdge){let r=Math.max(6,Math.round(17*open*scale)),cy=Math.round(y-24*scale),sk=Math.round(tilt*10);px(x,y-3,1,-Math.round(22*scale),c);px(x-4,y+6,7,1,c);px(x-5,y+5,1,1,c);for(let i=-r;i<=r;i++){let t=i/Math.max(r,1),h=Math.round((1-t*t)*10*scale),sx=x+i+Math.round(sk*(1-Math.abs(t)));for(let yy=0;yy<=h;yy++)if(((i+yy+frame)%15)!==0)px(sx,cy-yy,1,1,c)}for(let i=-r;i<=r;i+=3)px(x+i,cy,2,1,e);for(let i=-r;i<=r;i+=Math.max(5,Math.round(r/4))){let t=i/Math.max(r,1);px(x+i+Math.round(sk*(1-Math.abs(t))),cy,1,2,C.line)}for(let i=-Math.round(r*.65);i<=Math.round(r*.65);i+=5)px(x+i,cy+1,2,1,C.shadow)}
+function foldedUmbrella(x,y,scale=1,tilt=0,c=C.umbrella,e=C.umbrellaEdge){
+  let h=Math.round(18*scale), w=Math.max(3,Math.round(4*scale)), sk=Math.round(tilt*4);
+  // shaft
+  for(let i=0;i<h;i++) px(x+Math.round(Math.sin(i*.12)*sk*.08),y-i,1,1,c);
+  // compact folded canopy bundle so it doesn't read as a bare stick
+  for(let yy=0;yy<6;yy++){
+    let ww = w + (yy<2?2:(yy<4?1:0));
+    px(x-Math.floor(ww/2), y-h+yy, ww, 1, c);
+  }
+  px(x-w, y-h+1, 1, 4, e);
+  px(x+w-1, y-h+1, 1, 4, e);
+  px(x-1, y-h-1, 3, 2, c);
+  px(x-2, y-h+2, 1, 2, e);
+  px(x+2, y-h+2, 1, 2, e);
+  // tie strap
+  px(x-1, y-h+4, 3, 1, C.wet);
+  // handle
+  px(x-3,y+6,7,1,c);
+  px(x-4,y+5,1,1,c);
+}
+function wetOverlay(cx,cy,power=1){let wetCol=power>.8?"#74c0da":"#5e9eb9";for(let i=0;i<7;i++)px(cx-6+i*2,cy-2+Math.floor(i*.55),2,1,wetCol);px(cx-3,cy-4,3,2,wetCol);px(cx+2,cy-1,3,2,wetCol);for(let i=0;i<3;i++)px(cx+6+i,cy+3+i,1,2,C.rain)}
+function wetEdges(cx,cy,power=1){let col=power>.8?"#78cce6":"#67aac4";for(let i=0;i<3;i++){px(cx-7+i,cy-2+i,2,1,col);px(cx+5+i,cy-1+i,2,1,col);}px(cx-6,cy+3,2,1,col);px(cx+6,cy+4,2,1,col);}
+
+function subject(cx,cy,rx=7,ry=8,j=0,dxm=0,dym=0,mode="normal"){let brx=Math.max(4,rx+dxm),bry=Math.max(4,ry+dym);for(let yy=-bry+1;yy<=bry-1;yy++)for(let xx=-brx+1;xx<=brx-1;xx++){let wob=Math.sin((xx+frame*.02)*.7+j)*.22+Math.cos((yy-frame*.03)*.6)*.16,dx=xx/(brx-.6+wob),dy=yy/(bry-.35-wob*.2);if(dx*dx+dy*dy<=1&&((xx*2+yy+frame)%7)!==0)px(cx+xx,cy+yy,1,1,C.absence)}outline(cx,cy,brx-1,bry-1,C.absenceEdge);px(cx-brx+1,cy-1,1,2,C.core);px(cx+brx-1,cy,1,2,C.core);let hw=3,hh=3,hx=cx+Math.floor(brx*.12),hy=cy-1;if(mode==="damaged"){hw=4;hh=3;hx=cx}if(mode==="wind"){hw=4;hh=2;hx=cx+2}px(hx-1,hy-1,hw,hh,C.coreDark);px(hx,hy,1,1,C.core);for(let xx=-2;xx<=2;xx+=2){px(cx+xx,cy-3,1,1,C.absenceEdge);px(cx+xx,cy+2,1,1,C.absenceEdge)}}
+function foot(x,y,c1=C.shadow,c2=C.trace){px(x-2,y,2,1,c1);px(x+1,y+1,2,1,c2)}
+function passer(x,y,w=4,h=10,dim=false){let c=dim?C.otherDim:C.other;px(x-1,y-h,w,h,c);px(x-2,y-h+2,1,h-1,c);px(x+3,y-h+3,1,h-2,c);px(x-2,y+1,6,1,C.shadow)}
+function tracesDraw(){for(const t of traces){t.life--;if(t.type==="foot"){let c=t.life>230?C.wet:C.shadow;foot(t.x,t.y,c,c)}if(t.type==="ring")outline(t.x,t.y,t.rx,t.ry,t.life>220?C.trace:C.shadow);if(t.type==="leak")px(t.x,t.y,t.w||3,1,t.life>160?C.rain:C.wet);if(t.type==="arc")px(t.x,t.y,3,1,t.life>180?C.trace:C.shadow)}traces=traces.filter(t=>t.life>0)}
+function rememberField(rx,ry){if(frame%30===0)traces.push({type:"ring",x:hero.x,y:hero.y-18,rx,ry,life:580})}
+function glyph(key){let bx=7,by=23;if(key==="birth"){outline(bx+8,by+5,7,3,C.portal);px(bx+8,by+5,2,1,C.absence)}if(key==="alley"){for(let i=0;i<5;i++)px(bx+i*3,by+Math.abs(2-i),2,1,C.trace);px(bx+8,by+4,7,1,C.absenceEdge)}if(key==="threshold"){outline(bx+8,by+4,6,3,C.trace);for(let i=0;i<4;i++)px(bx+3+i*3,by+9+i,2,1,C.rain)}if(key==="wind"){outline(bx+11,by+4,9,3,C.trace);for(let i=0;i<4;i++)px(bx+i*5,by+1+i,4,1,C.line)}if(key==="share"){outline(bx+5,by+5,5,3,C.trace);outline(bx+15,by+5,5,3,C.trace);px(bx+9,by+5,6,1,C.absenceEdge)}if(key==="station"){for(let i=0;i<4;i++)outline(bx+3+i*6,by+5+(i%2),4,2,C.trace)}if(key==="trace"){for(let i=0;i<7;i++)px(bx+i*4,by+Math.sin(i)*3+6,3,1,C.wet)}}
+function detour(x,y,s=1){for(let i=0;i<8;i++)px(x+s*(i*2),y+Math.round(Math.sin(i*.8)*3),2,1,C.trace)}
+function leakDamage(cx,cy){for(let i=0;i<5;i++)px(cx-5+i*3,cy+Math.floor(i*1.2),2,1,C.wet);px(cx+2,cy-2,3,2,C.coreDark)}
+function bridge(x1,y1,x2,y2,stable){let steps=Math.max(4,Math.floor(Math.abs(x2-x1)/3));for(let i=0;i<=steps;i++){let t=i/steps,x=lerp(x1,x2,t),y=lerp(y1,y2,t)+Math.sin(t*Math.PI)*-2;px(x,y,stable?2:1,1,stable?C.absenceEdge:C.wet)}}
+function publicPatch(strong=false){if(umbrellas.length<4)return;let min=1e9,max=-1e9,ay=0;for(const m of umbrellas){min=Math.min(min,m.x);max=Math.max(max,m.x);ay+=m.y}ay/=umbrellas.length;let cx=(min+max)/2,rx=Math.max(10,(max-min)/2+(strong?16:8)),ry=strong?10:7;for(let xx=-rx;xx<=rx;xx+=2)for(let yy=-ry;yy<=ry;yy+=2)if((xx*xx)/(rx*rx)+(yy*yy)/(ry*ry)<=1&&(xx+yy+frame)% (strong?3:5)===0)px(cx+xx,ay-11+yy,1,1,strong?"#5f7d88":C.fieldSoft);outline(cx,ay-11,rx,ry,strong?C.absenceEdge:C.trace);if(strong){for(let i=-rx+4;i<=rx-4;i+=4)px(cx+i,ay-11,2,1,"#8fb2b8")}}
+
+function updateHero(){let tx=clamp(mouse.x,cols*.10,cols*.91),ty=clamp(mouse.y,rows*.54,rows*.79);hero.x=lerp(hero.x,tx,.03);hero.y=lerp(hero.y,ty,.03);hero.tilt=lerp(hero.tilt,clamp((mouse.x-hero.x)/20,-1,1),.07);let k=SPACES[scene].key;if(k==="birth")hero.target=mouse.down?1:.12;if(k==="alley")hero.target=1.2;if(k==="threshold")hero.target=hero.x>cols*.63?.24:.92;if(k==="wind")hero.target=1-hero.wind*.24;if(k==="share")hero.target=1.06;if(k==="station")hero.target=.84;if(k==="trace")hero.target=.08;hero.open=lerp(hero.open,hero.target,.07);if(k==="wind"){let sp=Math.abs(mouse.x-mouse.px)+Math.abs(mouse.y-mouse.py);if(mouse.down&&sp>1.1)hero.wind=clamp(hero.wind+.05,0,1);else hero.wind=clamp(hero.wind-.02,0,1)}else hero.wind=clamp(hero.wind-.02,0,1);if(k==="share")hero.share=lerp(hero.share,mouse.down?1:.42,.05);else hero.share=lerp(hero.share,0,.04);if(k==="station")hero.group=lerp(hero.group,mouse.down?1:.36,.04);else hero.group=lerp(hero.group,0,.04);if(frame%18===0&&k!=="trace")traces.push({type:"foot",x:hero.x+rand(-1,1),y:hero.y+9,life:500})}
+function addFactor(){
+  let k=SPACES[scene].key;
+  if(k==="alley"){
+    passers.push({x:mouse.x,y:mouse.y,w:4+Math.floor(rand(0,2)),h:9+Math.floor(rand(0,4)),mood:0});
+    remember("detour");
+  }
+  if(k==="threshold"){
+    leaks.push({x:mouse.x,y:mouse.y,life:220});
+    remember("leak");
+  }
+  if(k==="share"&&!second){
+    second={x:mouse.x,y:mouse.y};
+    remember("share");
+  }
+  if(k==="station"){
+    umbrellas.push({x:mouse.x,y:mouse.y,tx:mouse.x});
+    remember("public");
+  }
+}
+
+function sceneBirth(){
+  street();
+  let rx=Math.round(Math.max(6,20*hero.open)), ry=Math.round(Math.max(4,9*hero.open));
+  // subject exists from the beginning, before the boundary fully opens
+  if(hero.open>.20){
+    field(hero.x,hero.y-18,rx,ry,C.field,C.fieldEdge,1);
+    rainDraw({x:hero.x,y:hero.y-18,rx,ry});
+    rememberField(rx,ry);
+  }else{
+    rainDraw();
+  }
+  subject(hero.x,hero.y-7,7,8,.1);
+  foot(hero.x,hero.y+7);
+  // when the umbrella is still closed, the subject is slightly affected by rain
+  if(hero.open<.34) wetEdges(hero.x,hero.y-8,.55);
+  if(hero.open>.18) umbrella(hero.x,hero.y,Math.max(hero.open,.22),1.2,hero.tilt*.08);
+  else foldedUmbrella(hero.x,hero.y,1.06,hero.tilt*.05);
+  if(hero.open>.92){outline(hero.x,hero.y-18,24,11,C.glow);remember("birth")}
+}
+function sceneAlley(){alley();let rx=34,ry=13;field(hero.x,hero.y-19,rx,ry,"#4c6671",C.fieldEdge,2);rainDraw({x:hero.x,y:hero.y-19,rx,ry});rememberField(rx,ry);for(const p of passers){let d=dist(hero.x,hero.y-16,p.x,p.y-5);if(d<rx+2){let dx=p.x-hero.x;p.x+=Math.sign(dx||1)*.13;p.mood=lerp(p.mood,1,.08);px(p.x-4,p.y-13,5,1,C.wet);if(frame%12===0)traces.push({type:"arc",x:p.x+Math.sign(dx||1)*3,y:p.y+2,life:180});detour(p.x,p.y+4,Math.sign(dx||1))}else p.mood=lerp(p.mood,0,.04);passer(p.x,p.y,p.w,p.h,p.mood>.4)}subject(hero.x,hero.y-7,7,8,.4);foot(hero.x,hero.y+7);umbrella(hero.x,hero.y,1.2,1.25,hero.tilt*.05)}
+function sceneThreshold(){
+  threshold();
+  let inDoorBand = hero.x>cols*.63 && hero.x<cols*.77;
+  let insideSafe = hero.x>=cols*.77;
+  let compressed = hero.x>cols*.63;
+  let rx=Math.round(compressed?6:17), ry=Math.round(compressed?3:8);
+  // before the doorway and after entering, the subject is protected; only the narrow doorway leaks briefly
+  field(hero.x,hero.y-16,rx,ry,insideSafe?"#4c6470":(compressed?"#304853":"#45616d"),C.wet,3);
+  rainDraw({x:hero.x,y:hero.y-16,rx,ry});
+  rememberField(rx,ry);
+
+  if(inDoorBand){
+    if(frame%12===0) leaks.push({x:hero.x+rand(-8,8),y:hero.y+rand(3,9),life:140});
+    if(dist(mouse.x,mouse.y,hero.x,hero.y)<28&&frame%5===0) leaks.push({x:hero.x+rand(-6,6),y:hero.y+rand(2,7),life:120});
+  }
+  for(const l of leaks){
+    l.life--;
+    px(l.x,l.y,2,1,C.rain);
+    px(l.x,l.y+1,1,2,"#6fc6df");
+    if(l.life%30===0)traces.push({type:"leak",x:l.x,y:l.y,w:2,life:280});
+  }
+  leaks=leaks.filter(l=>l.life>0 && inDoorBand);
+
+  subject(hero.x,hero.y-7,7,8,.6,0,0,inDoorBand?"damaged":"normal");
+  if(inDoorBand){
+    leakDamage(hero.x,hero.y-8);
+    wetEdges(hero.x,hero.y-8,1);
+    foot(hero.x,hero.y+7,"#5ea5c0","#7bcfe8");
+    for(let i=0;i<4;i++)px(hero.x-6+i*4,hero.y-18+i,2,1,"#7bcfe8");
+  }else if(insideSafe){
+    foot(hero.x,hero.y+7,C.trace,C.trace);
+    px(hero.x-3,hero.y-10,2,1,C.absenceEdge);
+    px(hero.x+3,hero.y-9,2,1,C.absenceEdge);
+  }else{
+    foot(hero.x,hero.y+7,C.shadow,C.trace);
+  }
+
+  if(hero.open>.16)umbrella(hero.x,hero.y,hero.open,compressed?.72:1.05,hero.tilt*.04);
+  else foldedUmbrella(hero.x,hero.y,.86,hero.tilt*.04);
+  if(hero.x>cols*.67)remember("threshold")
+}
+function sceneWind(){windpass();let w=hero.wind,rx=Math.round(20+w*15),ry=Math.max(4,Math.round(9-w*4)),fx=hero.x+w*16,fy=hero.y-18+Math.sin(frame*.1)*w*4;field(fx,fy,rx,ry,"#455e68",C.wet,4);rainDraw({x:fx,y:fy,rx,ry},8+w*17);rememberField(rx,ry);if(frame%4===0&&w>.05)windBits.push({x:cols*.30,y:rand(rows*.30,rows*.68),life:40+Math.floor(w*40)});for(const b of windBits){b.life--;b.x+=1.4+w*2.6;if(b.life>0){px(b.x,b.y,4,1,C.line);px(b.x+2,b.y+1,2,1,C.trace)}}windBits=windBits.filter(b=>b.life>0&&b.x<cols);subject(hero.x+w*3,hero.y-7,7,8,.9,Math.round(w*3),-Math.round(w*2),"wind");if(w>.25)for(let i=0;i<8;i++)px(hero.x-5+i*3+w*8,hero.y-18+Math.sin(i)*3,3,1,C.trace);foot(hero.x,hero.y+7,C.trace,C.trace);umbrella(hero.x,hero.y,hero.open,1.22+w*.08,Math.sin(frame*.1)*w+hero.tilt*.05);if(w>.55)remember("wind")}
+function sceneShare(){
+  busstop();
+  let shelterL = cols*.56, shelterR = cols*.87, roofTop = rows*.40, floorY = rows*.72;
+  let entryBandL = shelterL-8, entryBandR = shelterL+8;
+
+  // Three readable zones: outside / threshold / inside
+  for(let xx=cols*.18; xx<shelterL-10; xx+=3){
+    if((xx+frame)%7===0) px(xx, floorY-18, 2, 1, "#354a55");
+  }
+  for(let xx=entryBandL; xx<=entryBandR; xx+=2){
+    px(xx, floorY+4, 1, 1, C.warm);
+    if((xx+frame)%5===0) px(xx, floorY-8, 1, 1, C.portal);
+  }
+  for(let xx=shelterL+3; xx<=shelterR-3; xx+=2){
+    for(let yy=0; yy<=16; yy+=2){
+      if((xx+yy+frame)%4===0) px(xx, roofTop+8+yy, 1, 1, "#536d76");
+    }
+  }
+
+  // clear frame and zone labels
+  px(shelterL+2, roofTop+2, 1, rows*.31, C.line);
+  px(shelterR-2, roofTop+2, 1, rows*.31, C.line);
+  px(shelterL+2, floorY+2, shelterR-shelterL-4, 1, "#425964");
+  txt("Outside: independent but exposed", cols*.20*cell, (floorY-26)*cell, 10, "rgba(220,235,239,.58)");
+  txt("Threshold", (entryBandL-1)*cell, (floorY+8)*cell, 10, "rgba(230,215,150,.70)");
+  txt("Inside: shareable", (shelterL+10)*cell, (floorY-26)*cell, 10, "rgba(220,235,239,.66)");
+
+  let sh = second ? hero.share : 0;
+  let dragSecond = !!second && mouse.down;
+
+  // Hero remains movable when not dragging the second subject
+  if(second && !dragSecond){
+    hero.x = lerp(hero.x, clamp(mouse.x, cols*.12, cols*.92), .05);
+    hero.y = lerp(hero.y, clamp(mouse.y, rows*.60, rows*.79), .05);
+  }
+
+  if(second && dragSecond){
+    second.x = lerp(second.x, clamp(mouse.x, cols*.18, cols*.93), .22);
+    second.y = lerp(second.y, clamp(mouse.y, rows*.58, rows*.78), .22);
+  }
+
+  let inside=false, atEntry=false, outside=false, stable=false;
+  if(second){
+    inside = second.x > shelterL+6 && second.x < shelterR-8 && second.y > roofTop+16 && second.y < floorY+2;
+    atEntry = second.x >= entryBandL && second.x <= entryBandR;
+    outside = second.x < shelterL-2 || second.x > shelterR+1;
+    stable = inside && mouse.down;
+  }
+
+  // Main subject's own valid boundary
+  field(hero.x-4, hero.y-18, 15, 8, inside?"#59737d":"#526b75", C.absenceEdge, 5);
+
+  if(second){
+    if(outside){
+      // outside is a complete independent state: its own boundary, plus exposed wet edge
+      field(second.x+1, second.y-18, 13, 7, "#425862", C.wet, 6);
+      outline(second.x+1, second.y-18, 15, 8, C.wet);
+    }else if(atEntry){
+      field(second.x+1, second.y-18, 12, 7, "#536c75", C.fieldEdge, 6);
+      outline(second.x+1, second.y-18, 13, 7, C.portal);
+    }else if(inside){
+      field(second.x+1, second.y-18, 12, 7, "#5e7d86", C.absenceEdge, 6);
+    }else{
+      field(second.x+1, second.y-18, 12, 7, "#465b65", C.fieldEdge, 6);
+    }
+
+    if(stable){
+      outline((hero.x+second.x)/2, hero.y-18, 16, 5, C.absenceEdge);
+      for(let xx=-13; xx<=13; xx+=2){
+        for(let yy=-4; yy<=4; yy+=2){
+          if((xx*xx)/169 + (yy*yy)/16 <= 1 && (xx+yy+frame)%4===0) px((hero.x+second.x)/2+xx, hero.y-18+yy, 1,1, "#6d8b93");
+        }
+      }
+    }
+    rainDraw({x:hero.x+15, y:hero.y-18, rx:44, ry:11});
+  }else{
+    rainDraw({x:hero.x, y:hero.y-18, rx:20, ry:9});
+  }
+
+  rememberField(20,9);
+  subject(hero.x, hero.y-7, 6, 8, 1.1);
+  foot(hero.x, hero.y+7);
+
+  if(second){
+    subject(second.x, second.y-7, 6, 8, 1.8);
+    foot(second.x, second.y+7, C.trace, C.trace);
+
+    if(outside){
+      // outside valid but exposed
+      wetEdges(second.x, second.y-8, 1);
+      for(let i=0;i<4;i++) px(second.x-5+i*4, second.y-4+i%2, 2, 4, C.rain);
+      px(second.x-8, second.y-16, 1, 12, C.rain2);
+      px(second.x+9, second.y-16, 1, 12, C.rain2);
+      for(let i=0;i<4;i++) px(hero.x+12+i*6, hero.y-7+(i%2), 2,1, C.wet);
+      txt("Independently valid", (second.x-10)*cell, (second.y+12)*cell, 10, "rgba(220,235,239,.62)");
+    }else if(atEntry){
+      bridge(hero.x+6, hero.y-7, second.x-5, second.y-7, false);
+      px(entryBandL+2, floorY+1, 3, 1, C.portal);
+      px(entryBandR-4, floorY+1, 3, 1, C.portal);
+      wetEdges(second.x, second.y-8, .5);
+      px(second.x-2, second.y-3, 4, 1, C.core);
+      txt("Transition", (second.x-6)*cell, (second.y+12)*cell, 10, "rgba(230,215,150,.72)");
+    }else if(inside){
+      bridge(hero.x+6, hero.y-7, second.x-5, second.y-7, stable);
+      if(stable){
+        px(hero.x+8, hero.y-6, 8, 2, C.absenceEdge);
+        px((hero.x+second.x)/2-3, hero.y-4, 7, 2, C.core);
+        px(second.x-2, second.y-6, 5, 1, C.core);
+        txt("Sharing stabilised", (second.x-9)*cell, (second.y+12)*cell, 10, "rgba(220,235,239,.70)");
+        remember("shareStable");
+      }else{
+        for(let i=0;i<4;i++) px(hero.x+10+i*4, hero.y-8+(i%2), 1, 1, C.wet);
+        txt("Inside", (second.x-9)*cell, (second.y+12)*cell, 10, "rgba(220,235,239,.62)");
+      }
+    }else{
+      bridge(hero.x+6, hero.y-7, second.x-5, second.y-7, false);
+    }
+  }
+
+  umbrella(hero.x, hero.y, 1.08, 1.24, stable?.18:.02);
+}
+function sceneStation(){
+  station();
+  let overlap=0;
+  let strong = mouse.down;
+  for(let i=0;i<umbrellas.length;i++){
+    let m=umbrellas[i];
+    // initial state: loose, scattered, clearly separate
+    if(strong){
+      m.tx = cols*.36 + (i%4)*cols*.06 + (Math.floor(i/4)%2)*3;
+    }else{
+      m.tx = cols*.16 + i*cols*.085;
+    }
+    let targetY = strong ? rows*.68 + (i%2===0?0:-3) : rows*.71 + (i%2===0?0:-6);
+    m.x=lerp(m.x,m.tx,.012+hero.group*.04);
+    m.y=lerp(m.y,targetY,.03);
+    field(m.x,m.y-10,8,4,"#35505b",C.wet,i);
+    foot(m.x,m.y+5,C.shadow,C.trace);
+    px(m.x,m.y-10,2,1,C.absenceEdge);
+    umbrella(m.x,m.y,.76,.68,strong?0:Math.sin(i)*.03,"#c7d6d7",C.rain2);
+    if(i>0&&Math.abs(m.x-umbrellas[i-1].x)<18){
+      overlap++;
+      let bx=(m.x+umbrellas[i-1].x)/2;
+      for(let s=0;s<5;s++) px(bx-3+s,m.y-10+(s%2),2,1,strong?C.absenceEdge:C.fieldEdge);
+    }
+  }
+  publicPatch(strong);
+  if(strong && umbrellas.length>3){
+    outline(cols*.49,rows*.58,30,10,C.absenceEdge);
+    for(let i=0;i<12;i++) px(cols*.38+i*4,rows*.58+(i%3)-1,2,1,"#5d7a85");
+    for(let i=0;i<5;i++) px(cols*.44+i*6,rows*.54,3,1,"#94b8bc");
+  }
+  subject(hero.x,hero.y-7,6,8,2);
+  foot(hero.x,hero.y+7);
+  umbrella(hero.x,hero.y,.84,.92,hero.tilt*.04);
+  if(overlap>2)remember("station")
+}
+function finalMotifs(){
+  let ms=[["birth",cols*.20,rows*.31,"birth"],["detour",cols*.32,rows*.31,"detour"],["threshold",cols*.44,rows*.31,"leak"],["wind",cols*.56,rows*.31,"wind"],["share",cols*.68,rows*.31,"share"],["station",cols*.80,rows*.31,"cluster"]];
+  for(const [k,x,y,t] of ms){
+    let active=memory.some(j=>j.k===k||(k==="share"&&(j.k==="share"||j.k==="shareStable"))||(k==="detour"&&(j.k==="detour"||j.k==="arrive"))||(k==="station"&&(j.k==="station"||j.k==="public")));
+    if(!active) continue;
+    let col=C.trace, col2=C.shadow;
+    // subtle label plate
+    outline(x,y+8,9,4,C.shadow);
+    if(t==="birth"){
+      outline(x,y,8,4,col); px(x+1,y-1,3,3,col2);
+    }
+    if(t==="detour"){
+      for(let i=0;i<5;i++) px(x-10+i*3,y+Math.abs(2-i),2,1,col);
+    }
+    if(t==="leak"){
+      outline(x,y,6,3,col2); for(let i=0;i<4;i++) px(x-4+i*3,y+6+i,2,1,col);
+    }
+    if(t==="wind"){
+      outline(x+5,y,10,3,col); for(let i=0;i<4;i++) px(x-6+i*4,y-4+i,4,1,col2);
+    }
+    if(t==="share"){
+      outline(x-4,y,5,4,col); outline(x+5,y,5,4,col); px(x-1,y,4,1,col2);
+    }
+    if(t==="cluster"){
+      for(let i=0;i<4;i++) outline(x-10+i*6,y+(i%2),4,2,col);
+    }
+  }
+}
+function sceneTrace(){
+  lobby();
+  clearAfterRain();
+
+  // quiet final summary platform
+  let sx=cols*.50, sy=rows*.67;
+  outline(sx,sy,30,10,C.absenceEdge);
+  for(let xx=-26; xx<=26; xx+=2){
+    for(let yy=-7; yy<=7; yy+=2){
+      if((xx*xx)/676 + (yy*yy)/49 <= 1 && (xx+yy+frame)%5===0) px(sx+xx, sy+yy, 1,1, "#5d727a");
+    }
+  }
+
+  // top row: small memories from the journey, automatically visible
+  finalMotifs();
+
+  // central ending image: subject + folded umbrella + soft dry halo
+  for(let xx=-14; xx<=14; xx+=2){
+    for(let yy=-5; yy<=5; yy+=2){
+      if((xx*xx)/196 + (yy*yy)/25 <= 1 && (xx+yy+frame)%4===0) px(sx+xx, sy-4+yy, 1,1, "#718890");
+    }
+  }
+  outline(sx, sy-4, 16, 6, C.core);
+  subject(sx, sy+7, 7, 8, 2.2, 0, 0, "normal");
+  wetEdges(sx, sy+6, .35);
+  foot(sx, sy+21, C.trace, C.trace);
+
+  // umbrella rests beside the subject after the rain
+  foldedUmbrella(sx+22, sy+18, 1.22, -.10, "#c7d2d0", C.wet);
+  px(sx+18, sy+16, 3,1, C.wet);
+  px(sx+20, sy+13, 2,1, C.wet);
+
+  // bottom floor echoes: one clean horizontal memory band, not scattered everywhere
+  for(let i=0;i<7;i++){
+    let bx=cols*.22 + i*cols*.09;
+    outline(bx, rows*.82, 5+(i%2), 2, i%2===0?C.trace:C.shadow);
+  }
+
+  // clear sky / after-rain light accents
+  for(let i=0;i<7;i++) px(cols*.45+i*3, rows*.23+(i%2), 2,1, "#e6e8d1");
+  for(let i=0;i<6;i++) px(cols*.46+i*4, rows*.29+(i%2), 2,1, "#d7cf9d");
+}
+
+function render(){let k=SPACES[scene].key;if(k==="trace")lobby();else bg();updateHero();if(k!=="trace")tracesDraw();if(k==="birth")sceneBirth();if(k==="alley")sceneAlley();if(k==="threshold")sceneThreshold();if(k==="wind")sceneWind();if(k==="share")sceneShare();if(k==="station")sceneStation();if(k==="trace")sceneTrace();portal();checkPortal();if(k!=="trace"){if(mouse.down)px(mouse.x-1,mouse.y-1,3,3,C.warm);else px(mouse.x,mouse.y,1,1,C.portal);}txt("A Rainy Journey · "+SPACES[scene].title,18,18,14);glyph(k);cap();if(fade>0){ctx.fillStyle=`rgba(10,18,24,${fade})`;ctx.fillRect(0,0,W,H);fade=Math.max(0,fade-.035)}}
+function loop(){frame++;render();mouse.px=mouse.x;mouse.py=mouse.y;requestAnimationFrame(loop)}
+canvas.addEventListener("mousemove",e=>{let r=canvas.getBoundingClientRect();mouse.x=clamp((e.clientX-r.left)/r.width*cols,0,cols);mouse.y=clamp((e.clientY-r.top)/r.height*rows,0,rows)});
+canvas.addEventListener("mousedown",()=>{mouse.down=true;addFactor()});
+canvas.addEventListener("mouseup",()=>{mouse.down=false});
+window.addEventListener("keydown",e=>{if(e.key==="n"||e.key==="N"){scene=clamp(scene+1,0,SPACES.length-1);fade=1;init(true)}if(e.key==="b"||e.key==="B"){scene=clamp(scene-1,0,SPACES.length-1);fade=1;init(true)}if(e.key==="r"||e.key==="R"){memory=[];init(false)}});
+resize();loop();
+</script>
+</body>
+</html>
